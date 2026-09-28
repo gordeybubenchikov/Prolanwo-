@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>prolanwo++ — онлайн</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #e6edf3; }
+  h1 { text-align: center; font-size: 22px; margin: 8px 0; color: #e63946; }
+  h1 small { color: #8b949e; font-size: 13px; display: block; font-weight: 400; }
+  .toolbar { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+  button { flex: 1; min-width: 90px; padding: 10px 14px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .run { background: #e63946; color: #fff; }
+  .run:active { background: #b52a36; }
+  .clear, .examples { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
+  .label { font-size: 12px; color: #8b949e; margin: 10px 0 4px; text-transform: uppercase; letter-spacing: 1px; }
+  .editor-wrap { display: flex; border: 1px solid #30363d; border-radius: 8px; background: #161b22; overflow: hidden; height: 260px; }
+  #line-numbers { padding: 10px 8px 10px 10px; background: #0d1117; color: #484f58; font-family: 'Courier New', Consolas, monospace; font-size: 13px; line-height: 1.5; text-align: right; user-select: none; overflow: hidden; min-width: 36px; white-space: pre; }
+  #code { flex: 1; border: none; border-radius: 0; background: transparent; color: #e6edf3; font-family: 'Courier New', Consolas, monospace; font-size: 13px; line-height: 1.5; padding: 10px; resize: none; outline: none; overflow: auto; white-space: pre; overflow-wrap: normal; }
+  #terminal { background: #000; color: #d0d0d0; border: 1px solid #30363d; border-radius: 8px; padding: 12px; height: 240px; overflow-y: auto; font-family: 'Courier New', Consolas, monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; margin: 0; }
+  #input-row { display: none; align-items: center; gap: 6px; background: #000; border: 1px solid #30363d; border-top: none; border-radius: 0 0 8px 8px; padding: 8px 12px; margin-top: -9px; font-family: 'Courier New', Consolas, monospace; font-size: 13px; }
+  #input-row.active { display: flex; }
+  #input-row .arrow { color: #7ee787; }
+  #terminal-input { flex: 1; background: transparent; border: none; outline: none; color: #e6edf3; font-family: inherit; font-size: inherit; padding: 0; }
+</style>
+</head>
+<body>
+<h1>prolanwo++ <small>интерпретатор в браузере</small></h1>
+<div class="toolbar">
+  <button class="run" onclick="runCode()">▶ Запустить</button>
+  <button class="clear" onclick="clearOutput()">✕ Очистить</button>
+  <button class="examples" onclick="loadExample()">📚 Пример</button>
+</div>
+<div class="label">Код prolanwo++</div>
+<div class="editor-wrap">
+  <div id="line-numbers">1</div>
+  <textarea id="code" spellcheck="false">\"Привет, мир!"/
+variable line[name]_input("Как тебя зовут? ");
+briout("Привет, " + name + "!");</textarea>
+</div>
+<div class="label">Вывод</div>
+<pre id="terminal"></pre>
+<div id="input-row">
+  <span class="arrow">▶</span>
+  <input id="terminal-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+</div>
+<script>
+class ProlanwoError extends Error {}
+class ProlanwoSyntaxError extends ProlanwoError {}
+class ProlanwoRuntimeError extends ProlanwoError {}
+class ReturnSignal { constructor(v) { this.value = v; } }
+class StopSignal {}
+class StopFurtSignal {}
+class Token { constructor(t, v, l, c) { this.type = t; this.value = v; this.line = l; this.col = c; } }
+const KEYWORDS = {'variable':'VARIABLE','change':'CHANGE','briout':'BRIOUT','input':'INPUT','notchan':'NOTCHAN','true':'TRUE','false':'FALSE','if':'IF','or':'OR','replay':'REPLAY','begin':'BEGIN','function':'FUNCTION','return':'RETURN','array':'ARRAY','new':'NEW','object':'OBJECT','import':'IMPORT','history':'HISTORY','rollback':'ROLLBACK','stop':'STOP','stopfurt':'STOPFURT'};
+const TYPES = new Set(['line','number','trufal']);
+class Lexer {
+  constructor(src) { this.src = src; this.pos = 0; this.line = 1; this.col = 1; this.tokens = []; }
+  error(msg) { throw new ProlanwoSyntaxError(msg + " (строка " + this.line + ", колонка " + this.col + ")"); }
+  peek(o=0) { const i = this.pos + o; return i < this.src.length ? this.src[i] : ''; }
+  advance() { if (this.pos >= this.src.length) return ''; const ch = this.src[this.pos++]; if (ch === '\n') { this.line++; this.col = 1; } else { this.col++; } return ch; }
+  add(t, v) { this.tokens.push(new Token(t, v, this.line, this.col)); }
+  tokenize() {
+    while (this.pos < this.src.length) {
+      const ch = this.peek();
+      if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') { this.advance(); continue; }
+      if (ch === '\\' && this.peek(1) === '"') { this.readLineComment(); continue; }
+      if (ch === '\\' && this.peek(1) === '$') { this.readBlockComment(); continue; }
+      if (ch === '"') { this.readString(); continue; }
+      if (ch >= '0' && ch <= '9') { this.readNumber(); continue; }
+      if (/[a-zA-Zа-яА-ЯёЁ]/.test(ch)) { this.readWord(); continue; }
+      const two = ch + this.peek(1);
+      if (two === '$$') { this.add('AND','$$'); this.advance(); this.advance(); continue; }
+      if (two === '$#') { this.add('OROP','$#'); this.advance(); this.advance(); continue; }
+      if (two === '==') { this.add('EQEQ','=='); this.advance(); this.advance(); continue; }
+      if (two === '!=') { this.add('NEQ','!='); this.advance(); this.advance(); continue; }
+      if (two === '<=') { this.add('LE','<='); this.advance(); this.advance(); continue; }
+      if (two === '>=') { this.add('GE','>='); this.advance(); this.advance(); continue; }
+      const simple = {';':'SEMI','_':'ASSIGN','[':'LBRACKET',']':'RBRACKET','(':'LPAREN',')':'RPAREN','{':'LBRACE','}':'RBRACE','+':'PLUS','-':'MINUS','*':'STAR','/':'SLASH','.':'DOT',',':'COMMA',':':'COLON','=':'EQ','<':'LT','>':'GT'};
+      if (simple[ch]) { this.add(simple[ch], ch); this.advance(); continue; }
+      this.error("Неизвестный символ: " + JSON.stringify(ch));
+    }
+    this.add('EOF', null); return this.tokens;
+  }
+  readString() { this.advance(); let r = ''; while (this.pos < this.src.length && this.peek() !== '"') { if (this.peek() === '\\') { this.advance(); r += this.advance(); } else r += this.advance(); } if (this.pos >= this.src.length) this.error("Незакрытая строка"); this.advance(); r = r.replace(/\(tr/g, '\n'); this.add('STRING', r); }
+  readNumber() { const s = this.pos; while (this.peek() >= '0' && this.peek() <= '9') this.advance(); if (this.peek() === '.' && this.peek(1) >= '0' && this.peek(1) <= '9') { this.advance(); while (this.peek() >= '0' && this.peek() <= '9') this.advance(); } this.add('NUMBER', this.src.substring(s, this.pos)); }
+  readWord() { const s = this.pos; while (this.pos < this.src.length && /[a-zA-Zа-яА-ЯёЁ0-9_]/.test(this.peek())) this.advance(); const w = this.src.substring(s, this.pos); const lo = w.toLowerCase(); if (KEYWORDS[lo]) this.add(KEYWORDS[lo], w); else if (TYPES.has(lo)) this.add('TYPE', lo); else this.add('IDENT', w); }
+  readLineComment() { this.advance(); this.advance(); while (this.pos < this.src.length) { if (this.peek() === '"' && this.peek(1) === '/') { this.advance(); this.advance(); return; } this.advance(); } this.error("Незакрытый комментарий"); }
+  readBlockComment() { this.advance(); this.advance(); this.advance(); while (this.pos < this.src.length) { if (this.peek() === '"' && this.peek(1) === '$' && this.peek(2) === '/') { this.advance(); this.advance(); this.advance(); return; } this.advance(); } this.error("Незакрытый комментарий"); }
+}
+const N = (t, p) => Object.assign({ nodeType: t }, p);
+class Parser {
+  constructor(tk) { this.tokens = tk; this.pos = 0; }
+  peek(o=0) { const i = this.pos + o; return i < this.tokens.length ? this.tokens[i] : this.tokens[this.tokens.length-1]; }
+  advance() { const t = this.tokens[this.pos]; if (t.type !== 'EOF') this.pos++; return t; }
+  check(t) { return this.peek().type === t; }
+  match(t) { if (this.check(t)) return this.advance(); return null; }
+  expect(t, m) { if (this.check(t)) return this.advance(); const tok = this.peek(); throw new ProlanwoSyntaxError("Ожидалось " + (m || t) + ", получено " + tok.type + " " + JSON.stringify(tok.value) + " (строка " + tok.line + ")"); }
+  parse() { const s = []; while (!this.check('EOF')) s.push(this.statement()); return N('Program', { statements: s }); }
+  statement() {
+    const t = this.peek();
+    switch (t.type) {
+      case 'VARIABLE': return this.varDecl();
+      case 'CHANGE': return this.varChange();
+      case 'BRIOUT': return this.printStmt();
+      case 'NOTCHAN': return this.notchanStmt();
+      case 'IF': return this.ifStmt();
+      case 'REPLAY': return this.replayStmt();
+      case 'FUNCTION': return this.functionDecl();
+      case 'RETURN': return this.returnStmt();
+      case 'ARRAY': return this.arrayDecl();
+      case 'NEW': return this.newObjectStmt();
+      case 'IMPORT': return this.importStmt();
+      case 'ROLLBACK': return this.rollbackStmt();
+      case 'STOP': this.advance(); this.expect('SEMI'); return N('Stop',{});
+      case 'STOPFURT': this.advance(); this.expect('SEMI'); return N('StopFurt',{});
+    }
+    throw new ProlanwoSyntaxError("Неизвестная инструкция: " + JSON.stringify(t.value));
+  }
+  varDecl() { this.advance(); const ty = this.expect('TYPE').value; this.expect('LBRACKET'); const name = this.expect('IDENT').value; this.expect('RBRACKET'); let v = null, saved = false; if (this.match('ASSIGN')) { if (this.check('IDENT') && this.peek().value.toLowerCase() === 'savichan') { saved = true; this.advance(); this.expect('LPAREN'); v = this.expression(); this.expect('RPAREN'); } else { v = this.expression(); } } this.expect('SEMI'); return N('VarDecl', { type: ty, name, value: v, saved }); }
+  varChange() { this.advance(); this.expect('VARIABLE'); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); this.expect('ASSIGN'); const v = this.expression(); this.expect('SEMI'); return N('VarChange', { name: n, value: v }); }
+  printStmt() { this.advance(); this.expect('LPAREN'); const e = this.expression(); this.expect('RPAREN'); this.expect('SEMI'); return N('Print', { expr: e }); }
+  notchanStmt() { this.advance(); const n = this.expect('IDENT').value; this.expect('SEMI'); return N('NotChan', { name: n }); }
+  ifStmt() { this.advance(); this.expect('LPAREN'); const c = this.expression(); this.expect('RPAREN'); this.expect('LT'); const b = []; while (!this.check('GT') && !this.check('EOF')) b.push(this.statement()); this.expect('GT'); const el = []; let eb = null; while (this.check('OR')) { this.advance(); if (this.check('IF')) { this.advance(); this.expect('LPAREN'); const cc = this.expression(); this.expect('RPAREN'); this.expect('LT'); const bb = []; while (!this.check('GT') && !this.check('EOF')) bb.push(this.statement()); this.expect('GT'); el.push([cc, bb]); } else { this.expect('LT'); eb = []; while (!this.check('GT') && !this.check('EOF')) eb.push(this.statement()); this.expect('GT'); break; } } return N('If', { cond: c, body: b, elifs: el, elseBody: eb }); }
+  replayStmt() { this.advance(); this.expect('LPAREN'); const c = this.expression(); this.expect('RPAREN'); this.expect('BEGIN'); this.expect('LBRACE'); const b = []; while (!this.check('RBRACE') && !this.check('EOF')) b.push(this.statement()); this.expect('RBRACE'); return N('Replay', { cond: c, body: b }); }
+  functionDecl() { this.advance(); const nt = this.expect('IDENT'); const name = nt.value; if (!name || !(name[0] >= 'A' && name[0] <= 'Z') && !(name[0] >= 'А' && name[0] <= 'Я')) throw new ProlanwoSyntaxError("Имя функции с большой буквы: " + name); this.expect('LPAREN'); const p = []; if (!this.check('RPAREN')) { while (true) { const pt = this.expect('TYPE').value; this.expect('LBRACKET'); const pn = this.expect('IDENT').value; this.expect('RBRACKET'); p.push([pt, pn]); if (!this.match('COMMA')) break; } } this.expect('RPAREN'); this.expect('EQ'); this.expect('LPAREN'); const b = []; while (!this.check('RPAREN') && !this.check('EOF')) b.push(this.statement()); this.expect('RPAREN'); if (!this.hasReturn(b)) throw new ProlanwoSyntaxError("Функция " + name + " должна содержать return"); return N('FunctionDecl', { name, params: p, body: b }); }
+  hasReturn(s) { for (const x of s) { if (x.nodeType === 'Return') return true; if (x.nodeType === 'If') { if (this.hasReturn(x.body)) return true; for (const [, b] of x.elifs) if (this.hasReturn(b)) return true; if (x.elseBody && this.hasReturn(x.elseBody)) return true; } } return false; }
+  returnStmt() { this.advance(); const v = this.expression(); this.expect('SEMI'); return N('Return', { value: v }); }
+  arrayDecl() { this.advance(); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); let u = false; if (this.match('ASSIGN')) { const t = this.expect('IDENT'); if (t.value.toLowerCase() !== 'unlimited') throw new ProlanwoSyntaxError("Ожидалось unlimited"); u = true; } this.expect('LBRACKET'); const el = []; while (!this.check('RBRACKET') && !this.check('EOF')) { el.push(this.expression()); this.expect('SEMI'); } this.expect('RBRACKET'); return N('ArrayDecl', { name: n, elements: el, unlimited: u }); }
+  newObjectStmt() { this.advance(); this.expect('OBJECT'); this.expect('ARRAY'); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); this.expect('ASSIGN'); const v = this.expression(); this.expect('SEMI'); return N('ArrayAdd', { name: n, value: v }); }
+  importStmt() { this.advance(); this.expect('STAR'); const m = this.expect('IDENT').value; this.expect('COLON'); const o = this.expect('IDENT').value; this.expect('LBRACKET'); this.expect('IDENT'); this.expect('RBRACKET'); this.expect('STAR'); this.expect('SEMI'); return N('Import', { module: m, obj: o }); }
+  rollbackStmt() { this.advance(); this.expect('VARIABLE'); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); let i = null; if (this.match('LBRACKET')) { i = this.expression(); this.expect('RBRACKET'); } this.expect('SEMI'); return N('Rollback', { name: n, index: i }); }
+  expression() { return this.logicOr(); }
+  logicOr() { let l = this.logicAnd(); while (this.check('OROP')) { this.advance(); const r = this.logicAnd(); l = N('BinOp', { op: 'OROP', left: l, right: r }); } return l; }
+  logicAnd() { let l = this.comparison(); while (this.check('AND')) { this.advance(); const r = this.comparison(); l = N('BinOp', { op: 'AND', left: l, right: r }); } return l; }
+  comparison() { let l = this.additive(); while (['EQEQ','NEQ','LT','GT','LE','GE'].includes(this.peek().type)) { const op = this.advance().type; const r = this.additive(); l = N('BinOp', { op, left: l, right: r }); } return l; }
+  additive() { let l = this.multiplicative(); while (this.check('PLUS') || this.check('MINUS')) { const op = this.advance().type; const r = this.multiplicative(); l = N('BinOp', { op, left: l, right: r }); } return l; }
+  multiplicative() { let l = this.primary(); while (this.check('STAR') || this.check('SLASH')) { const op = this.advance().type; const r = this.primary(); l = N('BinOp', { op, left: l, right: r }); } return l; }
+  primary() {
+    const t = this.peek();
+    if (t.type === 'NUMBER') { this.advance(); const v = t.value.indexOf('.') >= 0 ? parseFloat(t.value) : parseInt(t.value, 10); return N('Number', { value: v }); }
+    if (t.type === 'STRING') { this.advance(); return N('String', { value: t.value }); }
+    if (t.type === 'TRUE') { this.advance(); return N('Bool', { value: true }); }
+    if (t.type === 'FALSE') { this.advance(); return N('Bool', { value: false }); }
+    if (t.type === 'INPUT') { this.advance(); this.expect('LPAREN'); let p = null; if (this.check('STRING')) p = this.advance().value; this.expect('RPAREN'); return N('Input', { prompt: p }); }
+    if (t.type === 'HISTORY') { this.advance(); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); return N('HistoryRef', { name: n }); }
+    if (t.type === 'ARRAY') { this.advance(); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); this.expect('LBRACKET'); const i = this.expression(); this.expect('RBRACKET'); return N('ArrayAccess', { name: n, index: i }); }
+    if (t.type === 'IDENT') {
+      if (t.value === 'random' && this.peek(1).type === 'DOT') { this.advance(); this.expect('DOT'); const k = this.expect('IDENT').value.toLowerCase(); this.expect('LBRACKET'); if (k === 'number') { const lo = this.expression(); this.expect('COMMA'); const hi = this.expression(); this.expect('RBRACKET'); return N('RandomNumber', { low: lo, high: hi }); } else { const n = this.expect('IDENT').value; this.expect('RBRACKET'); return N('RandomArray', { name: n }); } }
+      if (this.peek(1).type === 'LPAREN') { const n = this.advance().value; this.expect('LPAREN'); const a = []; if (!this.check('RPAREN')) { while (true) { a.push(this.expression()); if (!this.match('COMMA')) break; } } this.expect('RPAREN'); return N('Call', { name: n, args: a }); }
+      this.advance(); return N('VarRef', { name: t.value });
+    }
+    if (t.type === 'LPAREN') { this.advance(); const e = this.expression(); this.expect('RPAREN'); return e; }
+    throw new ProlanwoSyntaxError("Неожиданный токен: " + t.type + " " + JSON.stringify(t.value));
+  }
+}
+class Interpreter {
+  constructor(out, inp) { this.out = out; this.inputFn = inp; this.vars = {}; this.types = {}; this.protected = new Set(); this.arrays = {}; this.arrayLimits = {}; this.functions = {}; this.history = {}; this.historyPos = {}; this.saved = new Set(); this.modules = new Set(); }
+  async run(p) { for (const s of p.statements) await this.execStmt(s); }
+  async execStmt(n) {
+    switch (n.nodeType) {
+      case 'VarDecl': return await this.execVarDecl(n);
+      case 'VarChange': return await this.execVarChange(n);
+      case 'Print': return await this.execPrint(n);
+      case 'NotChan': return this.execNotChan(n);
+      case 'If': return await this.execIf(n);
+      case 'Replay': return await this.execReplay(n);
+      case 'FunctionDecl': this.functions[n.name] = n; return;
+      case 'Return': throw new ReturnSignal(await this.eval(n.value));
+      case 'ArrayDecl': return await this.execArrayDecl(n);
+      case 'ArrayAdd': return await this.execArrayAdd(n);
+      case 'Import': this.modules.add(n.module); return;
+      case 'Rollback': return await this.execRollback(n);
+      case 'Stop': throw new StopSignal();
+      case 'StopFurt': throw new StopFurtSignal();
+    }
+    throw new ProlanwoRuntimeError("Неизвестный узел");
+  }
+  async execVarDecl(n) { if (n.name in this.vars) throw new ProlanwoRuntimeError("Переменная " + n.name + " уже существует"); const v = n.value !== null ? await this.eval(n.value) : null; this.checkType(n.type, v, n.name); this.vars[n.name] = v; this.types[n.name] = n.type; if (n.saved) { this.saved.add(n.name); this.history[n.name] = [v]; this.historyPos[n.name] = 0; } }
+  async execVarChange(n) { if (this.protected.has(n.name)) throw new ProlanwoRuntimeError("Переменная защищена"); const v = await this.eval(n.value); if (!(n.name in this.vars)) { this.vars[n.name] = v; this.types[n.name] = this.inferType(v); } else { this.checkType(this.types[n.name], v, n.name); this.vars[n.name] = v; if (this.saved.has(n.name)) { this.history[n.name] = this.history[n.name].slice(0, this.historyPos[n.name] + 1); this.history[n.name].push(v); this.historyPos[n.name] = this.history[n.name].length - 1; } } }
+  async execPrint(n) { this.out(this.toString(await this.eval(n.expr))); }
+  execNotChan(n) { if (!(n.name in this.vars)) throw new ProlanwoRuntimeError("Не найдена"); this.protected.add(n.name); }
+  async execIf(n) { if (this.toBool(await this.eval(n.cond))) { for (const s of n.body) await this.execStmt(s); return; } for (const [c, b] of n.elifs) { if (this.toBool(await this.eval(c))) { for (const s of b) await this.execStmt(s); return; } } if (n.elseBody) for (const s of n.elseBody) await this.execStmt(s); }
+  async execReplay(n) { while (this.toBool(await this.eval(n.cond))) { let st = false; for (const s of n.body) { try { await this.execStmt(s); } catch (e) { if (e instanceof StopSignal) { st = true; break; } if (e instanceof StopFurtSignal) break; throw e; } } if (st) break; } }
+  async execArrayDecl(n) { if (n.name in this.arrays) throw new ProlanwoRuntimeError("Массив уже есть"); if (!n.unlimited && n.elements.length > 100000) throw new ProlanwoRuntimeError("Превышен лимит"); const a = []; for (const e of n.elements) a.push(await this.eval(e)); this.arrays[n.name] = a; this.arrayLimits[n.name] = n.unlimited ? null : 100000; }
+  async execArrayAdd(n) { if (!(n.name in this.arrays)) throw new ProlanwoRuntimeError("Массив не найден"); const l = this.arrayLimits[n.name]; if (l !== null && this.arrays[n.name].length >= l) throw new ProlanwoRuntimeError("Лимит массива"); this.arrays[n.name].push(await this.eval(n.value)); }
+  async execRollback(n) { if (!this.saved.has(n.name)) throw new ProlanwoRuntimeError("Не сохранена"); const h = this.history[n.name]; let p = this.historyPos[n.name]; if (n.index === null) { if (p > 0) p--; } else { const i = parseInt(await this.eval(n.index), 10); if (i >= 0 && i < h.length) p = i; } this.historyPos[n.name] = p; this.vars[n.name] = h[p]; }
+  async eval(n) {
+    switch (n.nodeType) {
+      case 'Number': return n.value;
+      case 'String': return n.value;
+      case 'Bool': return n.value;
+      case 'Input': { const p = n.prompt || ''; const r = await this.inputFn(p); return r === null || r === undefined ? '' : r; }
+      case 'VarRef': if (!(n.name in this.vars)) throw new ProlanwoRuntimeError("Переменная " + n.name + " не найдена"); return this.vars[n.name];
+      case 'BinOp': { const op = n.op; if (op === 'AND') { if (!this.toBool(await this.eval(n.left))) return false; return this.toBool(await this.eval(n.right)); } if (op === 'OROP') { if (this.toBool(await this.eval(n.left))) return true; return this.toBool(await this.eval(n.right)); } const l = await this.eval(n.left); const r = await this.eval(n.right); if (op === 'PLUS') { if (typeof l === 'string' || typeof r === 'string') return this.toString(l) + this.toString(r); return l + r; } if (op === 'MINUS') return l - r; if (op === 'STAR') return l * r; if (op === 'SLASH') { if (r === 0) throw new ProlanwoRuntimeError("Деление на ноль"); return l / r; } if (op === 'EQEQ') return l === r; if (op === 'NEQ') return l !== r; if (op === 'LT') return l < r; if (op === 'GT') return l > r; if (op === 'LE') return l <= r; if (op === 'GE') return l >= r; throw new ProlanwoRuntimeError("Оператор"); }
+      case 'Call': { if (!(n.name in this.functions)) throw new ProlanwoRuntimeError("Функция " + n.name + " не найдена"); const fn = this.functions[n.name]; if (n.args.length !== fn.params.length) throw new ProlanwoRuntimeError("Аргументы"); const sv = { ...this.vars }; const st = { ...this.types }; for (let i = 0; i < fn.params.length; i++) { const [pt, pn] = fn.params[i]; const v = await this.eval(n.args[i]); this.checkType(pt, v, pn); this.vars[pn] = v; this.types[pn] = pt; } let res; try { for (const s of fn.body) await this.execStmt(s); throw new ProlanwoRuntimeError("Нет return"); } catch (e) { if (e instanceof ReturnSignal) res = e.value; else { this.vars = sv; this.types = st; throw e; } } this.vars = sv; this.types = st; return res; }
+      case 'ArrayAccess': { if (!(n.name in this.arrays)) throw new ProlanwoRuntimeError("Массив не найден"); const i = parseInt(await this.eval(n.index), 10); const a = this.arrays[n.name]; if (i < 0 || i >= a.length) throw new ProlanwoRuntimeError("Индекс вне границ"); return a[i]; }
+      case 'RandomNumber': { let lo = parseInt(await this.eval(n.low), 10); let hi = parseInt(await this.eval(n.high), 10); if (hi < lo) { const t = lo; lo = hi; hi = t; } if (hi > 100000) throw new ProlanwoRuntimeError("Лимит 100000"); return Math.floor(Math.random() * (hi - lo + 1)) + lo; }
+      case 'RandomArray': { if (!(n.name in this.arrays)) throw new ProlanwoRuntimeError("Массив не найден"); const a = this.arrays[n.name]; if (!a.length) throw new ProlanwoRuntimeError("Пустой массив"); return a[Math.floor(Math.random() * a.length)]; }
+      case 'HistoryRef': { if (!(n.name in this.history)) throw new ProlanwoRuntimeError("История не найдена"); return this.history[n.name].slice(); }
+    }
+    throw new ProlanwoRuntimeError("Выражение");
+  }
+  toBool(v) { if (typeof v === 'boolean') return v; if (v === null || v === undefined) return false; if (typeof v === 'number') return v !== 0; if (typeof v === 'string') return v.length > 0; return !!v; }
+  toString(v) { if (v === null || v === undefined) return ''; if (v === true) return 'True'; if (v === false) return 'False'; if (Array.isArray(v)) return '[' + v.map(x => this.toString(x)).join(', ') + ']'; return String(v); }
+  inferType(v) { if (typeof v === 'boolean') return 'trufal'; if (typeof v === 'string') return 'line'; if (typeof v === 'number') return 'number'; return 'unknown'; }
+  checkType(t, v, n) { if (v === null || v === undefined) return; if (t === 'line' && typeof v !== 'string') throw new ProlanwoRuntimeError("Переменная " + n + ": нужен line"); if (t === 'number' && (typeof v === 'boolean' || typeof v !== 'number')) throw new ProlanwoRuntimeError("Переменная " + n + ": нужен number"); if (t === 'trufal' && typeof v !== 'boolean') throw new ProlanwoRuntimeError("Переменная " + n + ": нужен TruFal"); }
+}
+const terminalEl = document.getElementById('terminal');
+const inputRowEl = document.getElementById('input-row');
+const inputFieldEl = document.getElementById('terminal-input');
+let pendingInput = null;
+inputFieldEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && pendingInput) { const v = inputFieldEl.value; terminalEl.textContent += v + '\n'; terminalEl.scrollTop = terminalEl.scrollHeight; inputRowEl.classList.remove('active'); const p = pendingInput; pendingInput = null; p.resolve(v); } });
+async function runCode() {
+  const code = document.getElementById('code').value;
+  terminalEl.textContent = ''; inputRowEl.classList.remove('active');
+  if (!code.trim()) { terminalEl.textContent = 'Пустой код.'; return; }
+  const outputFn = (l) => { terminalEl.textContent += l + '\n'; terminalEl.scrollTop = terminalEl.scrollHeight; };
+  const inputFn = (p) => new Promise((resolve) => { if (p) { terminalEl.textContent += p; terminalEl.scrollTop = terminalEl.scrollHeight; } inputRowEl.classList.add('active'); inputFieldEl.value = ''; inputFieldEl.focus(); pendingInput = { resolve }; });
+  try { const tk = new Lexer(code).tokenize(); const pr = new Parser(tk).parse(); const it = new Interpreter(outputFn, inputFn); await it.run(pr); } catch (e) { if (e instanceof ProlanwoError) terminalEl.textContent += '❌ ' + e.message + '\n'; else terminalEl.textContent += '❌ ' + e.message + '\n'; terminalEl.scrollTop = terminalEl.scrollHeight; } finally { inputRowEl.classList.remove('active'); }
+}
+function clearOutput() { terminalEl.textContent = ''; inputRowEl.classList.remove('active'); }
+function loadExample() {
+  const ex = [
+`\\"Привет"/
+variable line[name]_input("Имя: ");
+briout("Привет, " + name + "!");`,
+`\\"Цикл"/
+variable number[i]_0;
+replay (i < 5) begin {
+    briout("i = " + i);
+    change variable[i]_i + 1;
+}`,
+`\\"Функция"/
+function Add(number[a], number[b]) =(
+    return a + b;
+)
+briout(Add(3, 4));`,
+`\\"Массив"/
+array[names] [
+    "Гордей";
+    "Пётр";
+]
+briout(array[names][0]);`,
+`\\"Рандом"/
+import *random:random[object]*;
+variable number[x]_random.number[1, 6];
+briout("Кубик: " + x);`
+  ];
+  document.getElementById('code').value = ex[Math.floor(Math.random() * ex.length)];
+  updateLineNumbers();
+}
+const codeEl = document.getElementById('code');
+const lineNumbersEl = document.getElementById('line-numbers');
+function updateLineNumbers() { const c = codeEl.value.split('\n').length; let s = ''; for (let i = 1; i <= c; i++) s += i + (i < c ? '\n' : ''); lineNumbersEl.textContent = s; lineNumbersEl.scrollTop = codeEl.scrollTop; }
+codeEl.addEventListener('input', updateLineNumbers);
+codeEl.addEventListener('scroll', () => { lineNumbersEl.scrollTop = codeEl.scrollTop; });
+updateLineNumbers();
+</script>
+</body>
+</html>
