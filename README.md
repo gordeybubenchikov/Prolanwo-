@@ -26,7 +26,7 @@ prolanwo++ — **не для простых**. Язык строгий, явны
 
 git clone https://github.com/gordeybubenchikov/prolanwo
 cd prolanwo
-python prolanwo.py пример.пв
+python prolanwo.py пример.pw
 
 ### Способ 2: Веб-версия
 
