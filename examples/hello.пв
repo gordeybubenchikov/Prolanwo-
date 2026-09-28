@@ -1,0 +1,5 @@
+\"Первая программа на prolanwo++"/
+
+variable line[name]_input("Как тебя зовут? ");
+briout("Привет, " + name + "!");
+briout("Добро пожаловать в prolanwo++!");
