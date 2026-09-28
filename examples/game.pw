@@ -1,0 +1,36 @@
+\"Игра: угадай число"/
+
+import *random:random[object]*;
+
+variable number[secret]_random.number[1, 100];
+variable number[attempt]_0;
+variable number[guess]_0;
+variable TruFal[win]_False;
+
+briout("===============================");
+briout("   УГАДАЙ ЧИСЛО (от 1 до 100)");
+briout("===============================");
+
+replay (attempt < 7 $$ win == False) begin {
+    change variable[attempt]_attempt + 1;
+    briout("Попытка " + attempt + " из 7");
+    change variable[guess]_input("Твой вариант: ");
+
+    if (guess == secret) <
+        change variable[win]_True;
+        briout("🎉 Правильно! Это " + secret);
+    >
+    or if (guess < secret) <
+        briout("⬆ Моё число больше");
+    >
+    or <
+        briout("⬇ Моё число меньше");
+    >
+}
+
+if (win) <
+    briout("Ты угадал за " + attempt + " попыток!");
+>
+or <
+    briout("Не угадал. Было число: " + secret);
+>
