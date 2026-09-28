@@ -1,0 +1,17 @@
+\"Факториал числа"/
+
+function Factorial(number[n]) =(
+    variable number[result]_1;
+    variable number[i]_1;
+    replay (i <= n) begin {
+        change variable[result]_result * i;
+        change variable[i]_i + 1;
+    }
+    return result;
+)
+
+variable number[n]_10;
+briout("Факториал 10 = " + Factorial(n));
+
+variable number[m]_input("Ещё число: ");
+briout("Факториал " + m + " = " + Factorial(m));
