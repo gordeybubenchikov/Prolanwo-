@@ -55,6 +55,65 @@ class StopFurtSignal {}
 class Token { constructor(t, v, l, c) { this.type = t; this.value = v; this.line = l; this.col = c; } }
 const KEYWORDS = {'variable':'VARIABLE','change':'CHANGE','briout':'BRIOUT','input':'INPUT','notchan':'NOTCHAN','true':'TRUE','false':'FALSE','if':'IF','or':'OR','replay':'REPLAY','begin':'BEGIN','function':'FUNCTION','return':'RETURN','array':'ARRAY','new':'NEW','object':'OBJECT','import':'IMPORT','history':'HISTORY','rollback':'ROLLBACK','stop':'STOP','stopfurt':'STOPFURT'};
 const TYPES = new Set(['line','number','trufal']);
+
+const HUMAN_NAMES = {
+  'IDENT': 'имя переменной (без пробелов)',
+  'NUMBER': 'число',
+  'STRING': 'строка в кавычках "..."',
+  'SEMI': 'точка с запятой ;',
+  'ASSIGN': 'знак _ (присваивание)',
+  'LBRACKET': 'открывающая [',
+  'RBRACKET': 'закрывающая ]',
+  'LPAREN': 'открывающая скобка (',
+  'RPAREN': 'закрывающая скобка )',
+  'LBRACE': 'открывающая фигурная {',
+  'RBRACE': 'закрывающая фигурная }',
+  'TYPE': 'тип переменной (line / number / TruFal)',
+  'LT': 'знак < (открытие блока)',
+  'GT': 'знак > (закрытие блока)',
+  'PLUS': 'плюс +',
+  'MINUS': 'минус -',
+  'STAR': 'звёздочка *',
+  'SLASH': 'слэш /',
+  'EQEQ': 'двойное равно ==',
+  'EQ': 'знак равно =',
+  'DOT': 'точка .',
+  'COMMA': 'запятая ,',
+  'COLON': 'двоеточие :',
+  'TRUE': 'True',
+  'FALSE': 'False',
+  'EOF': 'конец программы',
+  'VARIABLE': 'слово variable',
+  'CHANGE': 'слово change',
+  'BRIOUT': 'слово briout',
+  'INPUT': 'слово input',
+  'NOTCHAN': 'слово notchan',
+  'IF': 'слово if',
+  'OR': 'слово or',
+  'REPLAY': 'слово replay',
+  'BEGIN': 'слово begin',
+  'FUNCTION': 'слово function',
+  'RETURN': 'слово return',
+  'ARRAY': 'слово array',
+  'NEW': 'слово new',
+  'OBJECT': 'слово object',
+  'IMPORT': 'слово import',
+  'HISTORY': 'слово history',
+  'ROLLBACK': 'слово rollback',
+  'STOP': 'слово stop',
+  'STOPFURT': 'слово stopfurt',
+  'AND': 'знак $$ (логическое И)',
+  'OROP': 'знак $# (логическое ИЛИ)',
+  'NEQ': 'знак !=',
+  'LE': 'знак <=',
+  'GE': 'знак >=',
+};
+function human(t) { return HUMAN_NAMES[t] || t; }
+function humanValue(tok) {
+  if (tok.value === null || tok.value === undefined) return 'конец программы';
+  return '"' + tok.value + '"';
+}
+
 class Lexer {
   constructor(src) { this.src = src; this.pos = 0; this.line = 1; this.col = 1; this.tokens = []; }
   error(msg) { throw new ProlanwoSyntaxError(msg + " (строка " + this.line + ", колонка " + this.col + ")"); }
@@ -96,7 +155,15 @@ class Parser {
   advance() { const t = this.tokens[this.pos]; if (t.type !== 'EOF') this.pos++; return t; }
   check(t) { return this.peek().type === t; }
   match(t) { if (this.check(t)) return this.advance(); return null; }
-  expect(t, m) { if (this.check(t)) return this.advance(); const tok = this.peek(); throw new ProlanwoSyntaxError("Ожидалось " + (m || t) + ", получено " + tok.type + " " + JSON.stringify(tok.value) + " (строка " + tok.line + ")"); }
+  expect(t, m) {
+    if (this.check(t)) return this.advance();
+    const tok = this.peek();
+    const want = m || human(t);
+    const got = humanValue(tok);
+    throw new ProlanwoSyntaxError(
+      "Нужно " + want + ", а тут — " + got + " (строка " + tok.line + ")"
+    );
+  }
   parse() { const s = []; while (!this.check('EOF')) s.push(this.statement()); return N('Program', { statements: s }); }
   statement() {
     const t = this.peek();
@@ -116,18 +183,37 @@ class Parser {
       case 'STOP': this.advance(); this.expect('SEMI'); return N('Stop',{});
       case 'STOPFURT': this.advance(); this.expect('SEMI'); return N('StopFurt',{});
     }
-    throw new ProlanwoSyntaxError("Неизвестная инструкция: " + JSON.stringify(t.value));
+    throw new ProlanwoSyntaxError(
+      "Не понимаю, что такое " + humanValue(t) + " (строка " + t.line + "). " +
+      "Ожидалась команда: variable, change, briout, input, if, replay, function, array, new, import, return, stop, stopfurt"
+    );
   }
   varDecl() { this.advance(); const ty = this.expect('TYPE').value; this.expect('LBRACKET'); const name = this.expect('IDENT').value; this.expect('RBRACKET'); let v = null, saved = false; if (this.match('ASSIGN')) { if (this.check('IDENT') && this.peek().value.toLowerCase() === 'savichan') { saved = true; this.advance(); this.expect('LPAREN'); v = this.expression(); this.expect('RPAREN'); } else { v = this.expression(); } } this.expect('SEMI'); return N('VarDecl', { type: ty, name, value: v, saved }); }
-  varChange() { this.advance(); this.expect('VARIABLE'); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); this.expect('ASSIGN'); const v = this.expression(); this.expect('SEMI'); return N('VarChange', { name: n, value: v }); }
+  varChange() {
+    this.advance();
+    this.expect('VARIABLE');
+    this.expect('LBRACKET');
+    const n = this.expect('IDENT').value;
+    this.expect('RBRACKET');
+    let index = null;
+    if (this.check('LBRACKET')) {
+      this.advance();
+      index = this.expression();
+      this.expect('RBRACKET');
+    }
+    this.expect('ASSIGN');
+    const v = this.expression();
+    this.expect('SEMI');
+    return N('VarChange', { name: n, value: v, index });
+  }
   printStmt() { this.advance(); this.expect('LPAREN'); const e = this.expression(); this.expect('RPAREN'); this.expect('SEMI'); return N('Print', { expr: e }); }
   notchanStmt() { this.advance(); const n = this.expect('IDENT').value; this.expect('SEMI'); return N('NotChan', { name: n }); }
   ifStmt() { this.advance(); this.expect('LPAREN'); const c = this.expression(); this.expect('RPAREN'); this.expect('LT'); const b = []; while (!this.check('GT') && !this.check('EOF')) b.push(this.statement()); this.expect('GT'); const el = []; let eb = null; while (this.check('OR')) { this.advance(); if (this.check('IF')) { this.advance(); this.expect('LPAREN'); const cc = this.expression(); this.expect('RPAREN'); this.expect('LT'); const bb = []; while (!this.check('GT') && !this.check('EOF')) bb.push(this.statement()); this.expect('GT'); el.push([cc, bb]); } else { this.expect('LT'); eb = []; while (!this.check('GT') && !this.check('EOF')) eb.push(this.statement()); this.expect('GT'); break; } } return N('If', { cond: c, body: b, elifs: el, elseBody: eb }); }
   replayStmt() { this.advance(); this.expect('LPAREN'); const c = this.expression(); this.expect('RPAREN'); this.expect('BEGIN'); this.expect('LBRACE'); const b = []; while (!this.check('RBRACE') && !this.check('EOF')) b.push(this.statement()); this.expect('RBRACE'); return N('Replay', { cond: c, body: b }); }
-  functionDecl() { this.advance(); const nt = this.expect('IDENT'); const name = nt.value; if (!name || !(name[0] >= 'A' && name[0] <= 'Z') && !(name[0] >= 'А' && name[0] <= 'Я')) throw new ProlanwoSyntaxError("Имя функции с большой буквы: " + name); this.expect('LPAREN'); const p = []; if (!this.check('RPAREN')) { while (true) { const pt = this.expect('TYPE').value; this.expect('LBRACKET'); const pn = this.expect('IDENT').value; this.expect('RBRACKET'); p.push([pt, pn]); if (!this.match('COMMA')) break; } } this.expect('RPAREN'); this.expect('EQ'); this.expect('LPAREN'); const b = []; while (!this.check('RPAREN') && !this.check('EOF')) b.push(this.statement()); this.expect('RPAREN'); if (!this.hasReturn(b)) throw new ProlanwoSyntaxError("Функция " + name + " должна содержать return"); return N('FunctionDecl', { name, params: p, body: b }); }
+  functionDecl() { this.advance(); const nt = this.expect('IDENT'); const name = nt.value; if (!name || !(name[0] >= 'A' && name[0] <= 'Z') && !(name[0] >= 'А' && name[0] <= 'Я')) throw new ProlanwoSyntaxError("Имя функции должно начинаться с большой буквы: " + name); this.expect('LPAREN'); const p = []; if (!this.check('RPAREN')) { while (true) { const pt = this.expect('TYPE').value; this.expect('LBRACKET'); const pn = this.expect('IDENT').value; this.expect('RBRACKET'); p.push([pt, pn]); if (!this.match('COMMA')) break; } } this.expect('RPAREN'); this.expect('EQ'); this.expect('LPAREN'); const b = []; while (!this.check('RPAREN') && !this.check('EOF')) b.push(this.statement()); this.expect('RPAREN'); if (!this.hasReturn(b)) throw new ProlanwoSyntaxError("Функция " + name + " должна содержать return"); return N('FunctionDecl', { name, params: p, body: b }); }
   hasReturn(s) { for (const x of s) { if (x.nodeType === 'Return') return true; if (x.nodeType === 'If') { if (this.hasReturn(x.body)) return true; for (const [, b] of x.elifs) if (this.hasReturn(b)) return true; if (x.elseBody && this.hasReturn(x.elseBody)) return true; } } return false; }
   returnStmt() { this.advance(); const v = this.expression(); this.expect('SEMI'); return N('Return', { value: v }); }
-  arrayDecl() { this.advance(); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); let u = false; if (this.match('ASSIGN')) { const t = this.expect('IDENT'); if (t.value.toLowerCase() !== 'unlimited') throw new ProlanwoSyntaxError("Ожидалось unlimited"); u = true; } this.expect('LBRACKET'); const el = []; while (!this.check('RBRACKET') && !this.check('EOF')) { el.push(this.expression()); this.expect('SEMI'); } this.expect('RBRACKET'); return N('ArrayDecl', { name: n, elements: el, unlimited: u }); }
+  arrayDecl() { this.advance(); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); let u = false; if (this.match('ASSIGN')) { const t = this.expect('IDENT'); if (t.value.toLowerCase() !== 'unlimited') throw new ProlanwoSyntaxError("После имени массива можно написать только _unlimited, а тут — " + t.value); u = true; } this.expect('LBRACKET'); const el = []; while (!this.check('RBRACKET') && !this.check('EOF')) { el.push(this.expression()); this.expect('SEMI'); } this.expect('RBRACKET'); return N('ArrayDecl', { name: n, elements: el, unlimited: u }); }
   newObjectStmt() { this.advance(); this.expect('OBJECT'); this.expect('ARRAY'); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); this.expect('ASSIGN'); const v = this.expression(); this.expect('SEMI'); return N('ArrayAdd', { name: n, value: v }); }
   importStmt() { this.advance(); this.expect('STAR'); const m = this.expect('IDENT').value; this.expect('COLON'); const o = this.expect('IDENT').value; this.expect('LBRACKET'); this.expect('IDENT'); this.expect('RBRACKET'); this.expect('STAR'); this.expect('SEMI'); return N('Import', { module: m, obj: o }); }
   rollbackStmt() { this.advance(); this.expect('VARIABLE'); this.expect('LBRACKET'); const n = this.expect('IDENT').value; this.expect('RBRACKET'); let i = null; if (this.match('LBRACKET')) { i = this.expression(); this.expect('RBRACKET'); } this.expect('SEMI'); return N('Rollback', { name: n, index: i }); }
@@ -152,7 +238,7 @@ class Parser {
       this.advance(); return N('VarRef', { name: t.value });
     }
     if (t.type === 'LPAREN') { this.advance(); const e = this.expression(); this.expect('RPAREN'); return e; }
-    throw new ProlanwoSyntaxError("Неожиданный токен: " + t.type + " " + JSON.stringify(t.value));
+    throw new ProlanwoSyntaxError("Тут неожиданно оказалось " + humanValue(t) + " (строка " + t.line + "). Ожидалось значение: число, строка, переменная, input(...) или (выражение)");
   }
 }
 class Interpreter {
@@ -178,14 +264,33 @@ class Interpreter {
     throw new ProlanwoRuntimeError("Неизвестный узел");
   }
   async execVarDecl(n) { if (n.name in this.vars) throw new ProlanwoRuntimeError("Переменная " + n.name + " уже существует"); const v = n.value !== null ? await this.eval(n.value) : null; this.checkType(n.type, v, n.name); this.vars[n.name] = v; this.types[n.name] = n.type; if (n.saved) { this.saved.add(n.name); this.history[n.name] = [v]; this.historyPos[n.name] = 0; } }
-  async execVarChange(n) { if (this.protected.has(n.name)) throw new ProlanwoRuntimeError("Переменная защищена"); const v = await this.eval(n.value); if (!(n.name in this.vars)) { this.vars[n.name] = v; this.types[n.name] = this.inferType(v); } else { this.checkType(this.types[n.name], v, n.name); this.vars[n.name] = v; if (this.saved.has(n.name)) { this.history[n.name] = this.history[n.name].slice(0, this.historyPos[n.name] + 1); this.history[n.name].push(v); this.historyPos[n.name] = this.history[n.name].length - 1; } } }
+  async execVarChange(n) {
+    const value = await this.eval(n.value);
+    if (n.index !== null) {
+      if (!(n.name in this.arrays)) throw new ProlanwoRuntimeError("Массив " + n.name + " не найден");
+      const idx = parseInt(await this.eval(n.index), 10);
+      const arr = this.arrays[n.name];
+      if (idx < 0 || idx >= arr.length) throw new ProlanwoRuntimeError("Индекс " + idx + " вне границ массива " + n.name);
+      arr[idx] = value;
+      return;
+    }
+    if (this.protected.has(n.name)) throw new ProlanwoRuntimeError("Переменная " + n.name + " защищена (notchan)");
+    if (!(n.name in this.vars)) {
+      this.vars[n.name] = value;
+      this.types[n.name] = this.inferType(value);
+    } else {
+      this.checkType(this.types[n.name], value, n.name);
+      this.vars[n.name] = value;
+      if (this.saved.has(n.name)) { this.history[n.name] = this.history[n.name].slice(0, this.historyPos[n.name] + 1); this.history[n.name].push(value); this.historyPos[n.name] = this.history[n.name].length - 1; }
+    }
+  }
   async execPrint(n) { this.out(this.toString(await this.eval(n.expr))); }
-  execNotChan(n) { if (!(n.name in this.vars)) throw new ProlanwoRuntimeError("Не найдена"); this.protected.add(n.name); }
+  execNotChan(n) { if (!(n.name in this.vars)) throw new ProlanwoRuntimeError("Переменная " + n.name + " не найдена"); this.protected.add(n.name); }
   async execIf(n) { if (this.toBool(await this.eval(n.cond))) { for (const s of n.body) await this.execStmt(s); return; } for (const [c, b] of n.elifs) { if (this.toBool(await this.eval(c))) { for (const s of b) await this.execStmt(s); return; } } if (n.elseBody) for (const s of n.elseBody) await this.execStmt(s); }
   async execReplay(n) { while (this.toBool(await this.eval(n.cond))) { let st = false; for (const s of n.body) { try { await this.execStmt(s); } catch (e) { if (e instanceof StopSignal) { st = true; break; } if (e instanceof StopFurtSignal) break; throw e; } } if (st) break; } }
-  async execArrayDecl(n) { if (n.name in this.arrays) throw new ProlanwoRuntimeError("Массив уже есть"); if (!n.unlimited && n.elements.length > 100000) throw new ProlanwoRuntimeError("Превышен лимит"); const a = []; for (const e of n.elements) a.push(await this.eval(e)); this.arrays[n.name] = a; this.arrayLimits[n.name] = n.unlimited ? null : 100000; }
-  async execArrayAdd(n) { if (!(n.name in this.arrays)) throw new ProlanwoRuntimeError("Массив не найден"); const l = this.arrayLimits[n.name]; if (l !== null && this.arrays[n.name].length >= l) throw new ProlanwoRuntimeError("Лимит массива"); this.arrays[n.name].push(await this.eval(n.value)); }
-  async execRollback(n) { if (!this.saved.has(n.name)) throw new ProlanwoRuntimeError("Не сохранена"); const h = this.history[n.name]; let p = this.historyPos[n.name]; if (n.index === null) { if (p > 0) p--; } else { const i = parseInt(await this.eval(n.index), 10); if (i >= 0 && i < h.length) p = i; } this.historyPos[n.name] = p; this.vars[n.name] = h[p]; }
+  async execArrayDecl(n) { if (n.name in this.arrays) throw new ProlanwoRuntimeError("Массив " + n.name + " уже есть"); if (!n.unlimited && n.elements.length > 100000) throw new ProlanwoRuntimeError("Превышен лимит массива"); const a = []; for (const e of n.elements) a.push(await this.eval(e)); this.arrays[n.name] = a; this.arrayLimits[n.name] = n.unlimited ? null : 100000; }
+  async execArrayAdd(n) { if (!(n.name in this.arrays)) throw new ProlanwoRuntimeError("Массив " + n.name + " не найден"); const l = this.arrayLimits[n.name]; if (l !== null && this.arrays[n.name].length >= l) throw new ProlanwoRuntimeError("Массив " + n.name + " достиг лимита"); this.arrays[n.name].push(await this.eval(n.value)); }
+  async execRollback(n) { if (!this.saved.has(n.name)) throw new ProlanwoRuntimeError("Переменная " + n.name + " не сохранена (savichan)"); const h = this.history[n.name]; let p = this.historyPos[n.name]; if (n.index === null) { if (p > 0) p--; } else { const i = parseInt(await this.eval(n.index), 10); if (i >= 0 && i < h.length) p = i; } this.historyPos[n.name] = p; this.vars[n.name] = h[p]; }
   async eval(n) {
     switch (n.nodeType) {
       case 'Number': return n.value;
@@ -193,19 +298,19 @@ class Interpreter {
       case 'Bool': return n.value;
       case 'Input': { const p = n.prompt || ''; const r = await this.inputFn(p); return r === null || r === undefined ? '' : r; }
       case 'VarRef': if (!(n.name in this.vars)) throw new ProlanwoRuntimeError("Переменная " + n.name + " не найдена"); return this.vars[n.name];
-      case 'BinOp': { const op = n.op; if (op === 'AND') { if (!this.toBool(await this.eval(n.left))) return false; return this.toBool(await this.eval(n.right)); } if (op === 'OROP') { if (this.toBool(await this.eval(n.left))) return true; return this.toBool(await this.eval(n.right)); } const l = await this.eval(n.left); const r = await this.eval(n.right); if (op === 'PLUS') { if (typeof l === 'string' || typeof r === 'string') return this.toString(l) + this.toString(r); return l + r; } if (op === 'MINUS') return l - r; if (op === 'STAR') return l * r; if (op === 'SLASH') { if (r === 0) throw new ProlanwoRuntimeError("Деление на ноль"); return l / r; } if (op === 'EQEQ') return l === r; if (op === 'NEQ') return l !== r; if (op === 'LT') return l < r; if (op === 'GT') return l > r; if (op === 'LE') return l <= r; if (op === 'GE') return l >= r; throw new ProlanwoRuntimeError("Оператор"); }
-      case 'Call': { if (!(n.name in this.functions)) throw new ProlanwoRuntimeError("Функция " + n.name + " не найдена"); const fn = this.functions[n.name]; if (n.args.length !== fn.params.length) throw new ProlanwoRuntimeError("Аргументы"); const sv = { ...this.vars }; const st = { ...this.types }; for (let i = 0; i < fn.params.length; i++) { const [pt, pn] = fn.params[i]; const v = await this.eval(n.args[i]); this.checkType(pt, v, pn); this.vars[pn] = v; this.types[pn] = pt; } let res; try { for (const s of fn.body) await this.execStmt(s); throw new ProlanwoRuntimeError("Нет return"); } catch (e) { if (e instanceof ReturnSignal) res = e.value; else { this.vars = sv; this.types = st; throw e; } } this.vars = sv; this.types = st; return res; }
-      case 'ArrayAccess': { if (!(n.name in this.arrays)) throw new ProlanwoRuntimeError("Массив не найден"); const i = parseInt(await this.eval(n.index), 10); const a = this.arrays[n.name]; if (i < 0 || i >= a.length) throw new ProlanwoRuntimeError("Индекс вне границ"); return a[i]; }
-      case 'RandomNumber': { let lo = parseInt(await this.eval(n.low), 10); let hi = parseInt(await this.eval(n.high), 10); if (hi < lo) { const t = lo; lo = hi; hi = t; } if (hi > 100000) throw new ProlanwoRuntimeError("Лимит 100000"); return Math.floor(Math.random() * (hi - lo + 1)) + lo; }
-      case 'RandomArray': { if (!(n.name in this.arrays)) throw new ProlanwoRuntimeError("Массив не найден"); const a = this.arrays[n.name]; if (!a.length) throw new ProlanwoRuntimeError("Пустой массив"); return a[Math.floor(Math.random() * a.length)]; }
-      case 'HistoryRef': { if (!(n.name in this.history)) throw new ProlanwoRuntimeError("История не найдена"); return this.history[n.name].slice(); }
+      case 'BinOp': { const op = n.op; if (op === 'AND') { if (!this.toBool(await this.eval(n.left))) return false; return this.toBool(await this.eval(n.right)); } if (op === 'OROP') { if (this.toBool(await this.eval(n.left))) return true; return this.toBool(await this.eval(n.right)); } const l = await this.eval(n.left); const r = await this.eval(n.right); if (op === 'PLUS') { if (typeof l === 'string' || typeof r === 'string') return this.toString(l) + this.toString(r); return l + r; } if (op === 'MINUS') return l - r; if (op === 'STAR') return l * r; if (op === 'SLASH') { if (r === 0) throw new ProlanwoRuntimeError("Деление на ноль"); return l / r; } if (op === 'EQEQ') return l === r; if (op === 'NEQ') return l !== r; if (op === 'LT') return l < r; if (op === 'GT') return l > r; if (op === 'LE') return l <= r; if (op === 'GE') return l >= r; throw new ProlanwoRuntimeError("Неизвестный оператор"); }
+      case 'Call': { if (!(n.name in this.functions)) throw new ProlanwoRuntimeError("Функция " + n.name + " не найдена"); const fn = this.functions[n.name]; if (n.args.length !== fn.params.length) throw new ProlanwoRuntimeError("Функция " + n.name + " ждёт " + fn.params.length + " аргументов, а дано " + n.args.length); const sv = { ...this.vars }; const st = { ...this.types }; for (let i = 0; i < fn.params.length; i++) { const [pt, pn] = fn.params[i]; const v = await this.eval(n.args[i]); this.checkType(pt, v, pn); this.vars[pn] = v; this.types[pn] = pt; } let res; try { for (const s of fn.body) await this.execStmt(s); throw new ProlanwoRuntimeError("Функция " + n.name + " не вернула значение"); } catch (e) { if (e instanceof ReturnSignal) res = e.value; else { this.vars = sv; this.types = st; throw e; } } this.vars = sv; this.types = st; return res; }
+      case 'ArrayAccess': { if (!(n.name in this.arrays)) throw new ProlanwoRuntimeError("Массив " + n.name + " не найден"); const i = parseInt(await this.eval(n.index), 10); const a = this.arrays[n.name]; if (i < 0 || i >= a.length) throw new ProlanwoRuntimeError("Индекс " + i + " вне границ массива " + n.name); return a[i]; }
+      case 'RandomNumber': { let lo = parseInt(await this.eval(n.low), 10); let hi = parseInt(await this.eval(n.high), 10); if (hi < lo) { const t = lo; lo = hi; hi = t; } if (hi > 100000) throw new ProlanwoRuntimeError("random.number: превышен лимит 100000"); return Math.floor(Math.random() * (hi - lo + 1)) + lo; }
+      case 'RandomArray': { if (!(n.name in this.arrays)) throw new ProlanwoRuntimeError("Массив " + n.name + " не найден"); const a = this.arrays[n.name]; if (!a.length) throw new ProlanwoRuntimeError("Массив " + n.name + " пуст"); return a[Math.floor(Math.random() * a.length)]; }
+      case 'HistoryRef': { if (!(n.name in this.history)) throw new ProlanwoRuntimeError("История " + n.name + " не найдена"); return this.history[n.name].slice(); }
     }
-    throw new ProlanwoRuntimeError("Выражение");
+    throw new ProlanwoRuntimeError("Неизвестное выражение");
   }
   toBool(v) { if (typeof v === 'boolean') return v; if (v === null || v === undefined) return false; if (typeof v === 'number') return v !== 0; if (typeof v === 'string') return v.length > 0; return !!v; }
   toString(v) { if (v === null || v === undefined) return ''; if (v === true) return 'True'; if (v === false) return 'False'; if (Array.isArray(v)) return '[' + v.map(x => this.toString(x)).join(', ') + ']'; return String(v); }
   inferType(v) { if (typeof v === 'boolean') return 'trufal'; if (typeof v === 'string') return 'line'; if (typeof v === 'number') return 'number'; return 'unknown'; }
-  checkType(t, v, n) { if (v === null || v === undefined) return; if (t === 'line' && typeof v !== 'string') throw new ProlanwoRuntimeError("Переменная " + n + ": нужен line"); if (t === 'number' && (typeof v === 'boolean' || typeof v !== 'number')) throw new ProlanwoRuntimeError("Переменная " + n + ": нужен number"); if (t === 'trufal' && typeof v !== 'boolean') throw new ProlanwoRuntimeError("Переменная " + n + ": нужен TruFal"); }
+  checkType(t, v, n) { if (v === null || v === undefined) return; if (t === 'line' && typeof v !== 'string') throw new ProlanwoRuntimeError("Переменная " + n + " типа line не может хранить " + JSON.stringify(v)); if (t === 'number' && (typeof v === 'boolean' || typeof v !== 'number')) throw new ProlanwoRuntimeError("Переменная " + n + " типа number не может хранить " + JSON.stringify(v)); if (t === 'trufal' && typeof v !== 'boolean') throw new ProlanwoRuntimeError("Переменная " + n + " типа TruFal не может хранить " + JSON.stringify(v)); }
 }
 const terminalEl = document.getElementById('terminal');
 const inputRowEl = document.getElementById('input-row');
@@ -246,7 +351,11 @@ briout(array[names][0]);`,
 `\\"Рандом"/
 import *random:random[object]*;
 variable number[x]_random.number[1, 6];
-briout("Кубик: " + x);`
+briout("Кубик: " + x);`,
+`\\"Запись в массив"/
+array[nums] [ 10; 20; 30; ]
+change variable[nums][0]_100;
+briout(array[nums]);`
   ];
   document.getElementById('code').value = ex[Math.floor(Math.random() * ex.length)];
   updateLineNumbers();
